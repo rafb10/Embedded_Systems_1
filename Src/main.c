@@ -16,9 +16,6 @@
   *
   ******************************************************************************
   */
-#define SET_POINT_SCALER 10
-#define TOLERANCE 20
-#define PWM_STEP 5
 /* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
@@ -36,6 +33,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define SET_POINT_SCALER 10
+#define TOLERANCE 20
+#define PWM_STEP 5
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,43 +46,35 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc;
+DMA_HandleTypeDef hdma_adc;
 
 I2C_HandleTypeDef hi2c1;
 
 SPI_HandleTypeDef hspi1;
 
-TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim3;
-TIM_HandleTypeDef htim15;
+TIM_HandleTypeDef htim1;	// LEDs PWM
+TIM_HandleTypeDef htim3;	// interrupt with main control program
+TIM_HandleTypeDef htim15;	// sending values to Arduino using spi
 
 /* USER CODE BEGIN PV */
 
-uint16_t *p_potentiometer;
-uint16_t potentiometer;
-uint16_t photoresistor;
-uint16_t photores_set_point;
-uint8_t duty_level;
-int16_t difference = 0;
+volatile uint16_t *p_potentiometer;
+volatile uint16_t potentiometer;
+volatile uint16_t photoresistor;
+volatile uint16_t photores_set_point;
+volatile uint8_t duty_level;
+volatile int16_t difference;
 
-uint8_t i2c_from_Arduino[2];
-uint8_t spi_to_Arduino[2];
-/*
-float Temperature;
-float Vsense;
-*/
+volatile uint8_t i2c_from_Arduino[2];
+volatile uint8_t spi_to_Arduino[2];
 
-/*
-const float V25 = 0.76; // [Volts]
-const float Avg_slope = 0.0025; //[Volts/degree]
-const float SupplyVoltage = 3.0; // [Volts]
-const float ADCResolution = 4095.0;
-*/
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_I2C1_Init(void);
@@ -89,20 +82,11 @@ static void MX_TIM1_Init(void);
 static void MX_TIM15_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
-__weak void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-	 if(GPIO_Pin == BLUE_BUTTON_Pin){
-		 HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-		 //HAL_GPIO_TogglePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin);
-	 }
-}
+
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef*htim)
 {
 	if(htim->Instance == TIM3){
-		//get voltage from potentiometer
-		potentiometer = HAL_ADC_GetValue(&hadc);
-		HAL_ADC_Start(&hadc);
 		//get value from photoresistor - i2c from Arduino
 		HAL_I2C_Master_Receive(&hi2c1, 0x8 << 1, i2c_from_Arduino, 2, 1000);
 		photoresistor = i2c_from_Arduino[1] << 8 | i2c_from_Arduino[0];
@@ -123,12 +107,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef*htim)
 
 		// apply duty level
 		TIM1->CCR1 = duty_level;
+	}
+
+
+	if(htim->Instance == TIM15){
 		//update array with values that are sent to Arduino using spi
 		spi_to_Arduino[1] = (potentiometer >> 8) & 0xFF;
 		spi_to_Arduino[0] = potentiometer & 0xFF;
-	}
 
-	if(htim->Instance == TIM15){
 		// send values to Arduino using spi
 		HAL_GPIO_TogglePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin); // only to inform that values are sent
 		HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
@@ -140,7 +126,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef*htim)
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
 
 /* USER CODE END 0 */
 
@@ -172,6 +157,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC_Init();
   MX_TIM3_Init();
   MX_I2C1_Init();
@@ -179,7 +165,7 @@ int main(void)
   MX_TIM15_Init();
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
-  HAL_ADC_Start(&hadc);
+ // HAL_ADC_Start_IT(&hadc);
   HAL_TIM_Base_Start_IT(&htim3);
   HAL_TIM_Base_Start_IT(&htim15);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
@@ -274,7 +260,7 @@ static void MX_ADC_Init(void)
   hadc.Init.DiscontinuousConvMode = DISABLE;
   hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc.Init.DMAContinuousRequests = DISABLE;
+  hadc.Init.DMAContinuousRequests = ENABLE;
   hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
   if (HAL_ADC_Init(&hadc) != HAL_OK)
   {
@@ -475,7 +461,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 60000;
+  htim3.Init.Prescaler = 30000;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 150;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -544,6 +530,22 @@ static void MX_TIM15_Init(void)
   /* USER CODE BEGIN TIM15_Init 2 */
 
   /* USER CODE END TIM15_Init 2 */
+
+}
+
+/** 
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void) 
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 
 }
 
